@@ -4,7 +4,7 @@ import sys
 base = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../')
 sys.path.append(base)
 
-from attacks.util import Normalizer, Denormalizer
+from attacks.utils import Normalizer, Denormalizer
 
 import torch
 
@@ -18,11 +18,12 @@ class PixelModel(torch.nn.Module):
         self.model = model
         self.normalizer = Normalizer(input_size, mean, std)
 
-    def forward(self, x):
+    def forward(self, pixel_x):
         """
         [0, 255] -> [0, 1]
         """
-        x = self.normalizer(x)
+        x = self.normalizer(pixel_x)  # rescale [0, 255] -> [0, 1] and normalize
+        # IMPORTANT: this return is in [0, 1]
         return self.model(x)
 
 
@@ -34,6 +35,7 @@ class AttackWrapper(torch.nn.Module):
         - mean
         - std
         """
+        super().__init__()
         required_keys = set('input_size mean std'.split())
         parsed_args = self._parse_args(required_keys, kwargs)
 
@@ -44,7 +46,7 @@ class AttackWrapper(torch.nn.Module):
         self.denormalizer = Denormalizer(self.input_size, self.mean, self.std)
 
     def forward(self, model, x, *args, **kwargs):
-        was_training = model.was_training
+        was_training = model.training
         pixel_model = PixelModel(model, self.input_size, self.mean, self.std)
         pixel_model.eval()
         # forward input to  pixel space
