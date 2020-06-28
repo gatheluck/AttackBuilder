@@ -133,11 +133,11 @@ if __name__ == '__main__':
     model = model.cuda()
     model.eval()
 
-    eps = 8.0
-    num_iteration = 7
-    step_size = eps / math.sqrt(num_iteration)
-    # step_size = eps
-    rand_init = True
+    eps = 16.0
+    num_iteration = 20
+    # step_size = eps / math.sqrt(num_iteration)
+    step_size = eps
+    rand_init = False
     scale_eps = False
     scale_each = False
     mean = (0.49139968, 0.48215841, 0.44653091)
