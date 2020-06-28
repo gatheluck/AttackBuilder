@@ -4,6 +4,7 @@ import sys
 base = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../')
 sys.path.append(base)
 
+import random
 import torch
 
 from attacks.attack import AttackWrapper
@@ -13,7 +14,7 @@ from attacks.utils import normalized_random_init
 class PgdAttack(AttackWrapper):
     SUPPORTED_NORM = 'linf'.split()
 
-    def __init__(self, input_size: int, mean: tuple, std: tuple, num_iteration: int, eps_max: float, step_size: float, norm: str, rand_init: bool, criterion=torch.nn.CrossEntropyLoss(), device='cuda'):
+    def __init__(self, input_size: int, mean: tuple, std: tuple, num_iteration: int, eps_max: float, step_size: float, norm: str, rand_init: bool, scale_each: bool, criterion=torch.nn.CrossEntropyLoss(), device='cuda'):
         """
         Args
         - input_size (int)
@@ -24,6 +25,7 @@ class PgdAttack(AttackWrapper):
         - step_size (float): step size of single iteration
         - norm (str): type of norm
         - rand_init (bool): whether execute random init of delta or not
+        - scale_each (bool): whether to scale eps for each image in a batch separately. useful for adversarial training
         """
         super().__init__(input_size=input_size, mean=mean, std=std)
         if norm not in self.SUPPORTED_NORM:
@@ -38,6 +40,7 @@ class PgdAttack(AttackWrapper):
         self.step_size = step_size
         self.norm = norm
         self.rand_init = rand_init
+        self.scale_each = scale_each
         self.device = device
         self.criterion = criterion.cuda() if self.device == 'cuda' else criterion
 
@@ -54,8 +57,17 @@ class PgdAttack(AttackWrapper):
             return torch.zeros(shape, requires_grad=True, device=self.device)
 
     def _forward(self, pixel_model, pixel_x: torch.tensor, target, avoid_target: bool, scale_eps: bool):
-        base_eps = self.eps_max * torch.ones(pixel_x.size(0), device=self.device)
-        step_size = self.step_size * torch.ones(pixel_x.size(0), device=self.device)
+        # if scale_eps is True, change eps adaptively. this usually improve robustness against wide range of attack
+        if scale_eps:
+            if self.scale_each:
+                rand = torch.rand(pixel_x.size()[0], device=self.device)
+            else:
+                rand = random.random() * torch.ones(pixel_x.size()[0], device=self.device)
+            base_eps = rand.mul(self.eps_max)
+            step_size = rand.mul(self.step_size)
+        else:
+            base_eps = self.eps_max * torch.ones(pixel_x.size(0), device=self.device)
+            step_size = self.step_size * torch.ones(pixel_x.size(0), device=self.device)
 
         # init delta
         pixel_input = pixel_x.detach()
@@ -103,6 +115,7 @@ class PgdAttack(AttackWrapper):
 if __name__ == '__main__':
     import math
     import tqdm
+    import collections
     import torchvision
 
     from attacks.utils import accuracy
@@ -111,16 +124,22 @@ if __name__ == '__main__':
     from submodules.DatasetBuilder.dataset_builder import DatasetBuilder
     from submodules.ModelBuilder.model_builder import ModelBuilder
 
-    path = '/home/gatheluck/Scratch/Stronghold/logs/train/2020-06-26_12-55-57_cifar10/checkpoint/model_weight_final.pth'
+    os.makedirs('../logs', exist_ok=True)
+    # path = '/home/gatheluck/Scratch/Stronghold/logs/train/2020-06-26_12-55-57_cifar10/checkpoint/model_weight_final.pth'
+    path = '/media/gatheluck/gathe-drive/models/uar/adv-cifar10-models/models/clean_model.pth'
 
     model = ModelBuilder(num_classes=10)['resnet56']
     model.load_state_dict(torch.load(path))
     model = model.cuda()
     model.eval()
 
-    eps = 16
-    num_iteration = 20
+    eps = 8.0
+    num_iteration = 7
     step_size = eps / math.sqrt(num_iteration)
+    # step_size = eps
+    rand_init = True
+    scale_eps = False
+    scale_each = False
     mean = (0.49139968, 0.48215841, 0.44653091)
     std = (0.24703223, 0.24348513, 0.26158784)
     dataset_builder = DatasetBuilder(name='cifar10', input_size=32, mean=mean, std=std, root_path='../data')
@@ -132,21 +151,23 @@ if __name__ == '__main__':
     stdacc1_list = list()
     advacc1_list = list()
 
-    for i, (x, y) in tqdm.tqdm(enumerate(val_loader)):
-        x, y = x.to('cuda'), y.to('cuda')
+    with tqdm.tqdm(enumerate(val_loader)) as pbar:
+        for i, (x, y) in pbar:
+            x, y = x.to('cuda'), y.to('cuda')
 
-        attacker = PgdAttack(32, mean, std, num_iteration, eps, step_size, 'linf', True)
-        x_adv = attacker(model, x, target=y, avoid_target=True, scale_eps=False)
-        y_predict_std = model(x)
-        y_predict_adv = model(x_adv)
+            attacker = PgdAttack(32, mean, std, num_iteration, eps, step_size, 'linf', rand_init, scale_each)
+            x_adv = attacker(model, x, target=y, avoid_target=True, scale_eps=scale_eps)
+            y_predict_std = model(x)
+            y_predict_adv = model(x_adv)
 
-        stdacc1_list.append(*accuracy(y_predict_std, y))
-        advacc1_list.append(*accuracy(y_predict_adv, y))
+            stdacc1_list.append(*accuracy(y_predict_std, y))
+            advacc1_list.append(*accuracy(y_predict_adv, y))
+            pbar.set_postfix(collections.OrderedDict(std='{}'.format(*accuracy(y_predict_std, y)), adv='{}'.format(*accuracy(y_predict_adv, y))))
 
-        if i == 0:
+            if i == 0:
 
-            x_for_save = torch.cat([denormalizer(x[0:8, :, :, :]), denormalizer(x_adv[0:8, :, :, :])], dim=2)
-            torchvision.utils.save_image(x_for_save, '../logs/pgd_test.png')
+                x_for_save = torch.cat([denormalizer(x[0:8, :, :, :]), denormalizer(x_adv[0:8, :, :, :])], dim=2)
+                torchvision.utils.save_image(x_for_save, '../logs/pgd_test.png')
 
     stdacc1 = sum(stdacc1_list) / float(len(stdacc1_list))
     advacc1 = sum(advacc1_list) / float(len(advacc1_list))
