@@ -4,7 +4,7 @@
 
 ### PGD
 
-- `step_size=eps/sqrt(eps)`  is stronger than `step_size=eps`.
+- `step_size=eps/sqrt(num_iteration)`  generates stronger attack than `step_size=eps`.
 - `rand_init` is basically good to genetate strong attack. 
 
 | model | defense | norm | num iter | rand init | step size         | eps  | acc  | id |
