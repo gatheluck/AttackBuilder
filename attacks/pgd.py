@@ -4,6 +4,8 @@ import sys
 base = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../')
 sys.path.append(base)
 
+import hydra
+import omegaconf
 import random
 import torch
 
@@ -88,6 +90,8 @@ class PgdAttack(AttackWrapper):
         assert self.num_iteration > 0
 
         logit = pixel_model(pixel_input + pixel_delta)
+        if self.norm == 'l2':
+            l2_eps_max = eps
 
         for it in range(self.num_iteration):
             loss = self.criterion(logit, target)
@@ -103,6 +107,16 @@ class PgdAttack(AttackWrapper):
                 pixel_delta.data = pixel_delta.data + step_size[:, None, None, None] * grad_sign
                 pixel_delta.data = torch.max(torch.min(pixel_delta.data, eps[:, None, None, None]), -eps[:, None, None, None])  # scale in [-eps, +eps]
                 pixel_delta.data = torch.clamp(pixel_input.data + pixel_delta.data, 0.0, 255.0) - pixel_input.data
+            elif self.norm == 'l2':
+                batch_size = pixel_delta.data.size(0)
+                grad_norm = torch.norm(grad.view(batch_size, -1), p=2.0, dim=1)
+                normalized_grad = grad / grad_norm[:, None, None, None]
+                pixel_delta.data = pixel_delta.data + step_size[:, None, None, None] * normalized_grad
+                l2_pixel_delta = torch.norm(pixel_delta.data.view(batch_size, -1), p=2.0, dim=1)
+                # check numerical instabitily
+                proj_scale = torch.min(torch.ones_like(l2_pixel_delta, device=self.device), l2_eps_max / l2_pixel_delta)
+                pixel_delta.data *= proj_scale[:, None, None, None]
+                pixel_delta.data = torch.clamp(pixel_input.data + pixel_delta.data, 0.0, 255.0) - pixel_input.data
             else:
                 raise NotImplementedError
 
@@ -113,7 +127,8 @@ class PgdAttack(AttackWrapper):
         return pixel_delta
 
 
-if __name__ == '__main__':
+@hydra.main(config_path='../conf/test.yaml')
+def main(cfg: omegaconf.DictConfig) -> None:
     import math
     import tqdm
     import collections
@@ -125,39 +140,29 @@ if __name__ == '__main__':
     from submodules.DatasetBuilder.dataset_builder import DatasetBuilder
     from submodules.ModelBuilder.model_builder import ModelBuilder
 
-    os.makedirs('../logs', exist_ok=True)
-    # path = '/home/gatheluck/Scratch/Stronghold/logs/train/2020-06-26_12-55-57_cifar10/checkpoint/model_weight_final.pth'
-    path = '/media/gatheluck/gathe-drive/models/uar/adv-cifar10-models/models/clean_model.pth'
+    print(cfg.pretty())
+    cfg.attack.step_size = eval(cfg.attack.step_size)  # eval actual value of step_size
 
-    model = ModelBuilder(num_classes=10)['resnet56']
-    model.load_state_dict(torch.load(path))
-    model = model.cuda()
+    model = ModelBuilder(num_classes=cfg.dataset.num_classes)[cfg.arch]
+    model.load_state_dict(torch.load(os.path.join(hydra.utils.get_original_cwd(), cfg.weight)))
+    model = model.cuda() if cfg.device == 'cuda' else model
     model.eval()
 
-    eps = 16.0
-    num_iteration = 20
-    # step_size = eps / math.sqrt(num_iteration)
-    step_size = eps
-    rand_init = False
-    scale_eps = False
-    scale_each = False
-    mean = (0.49139968, 0.48215841, 0.44653091)
-    std = (0.24703223, 0.24348513, 0.26158784)
-    dataset_builder = DatasetBuilder(name='cifar10', input_size=32, mean=mean, std=std, root_path='../data')
-    val_dataset = dataset_builder(train=False, normalize=True)
-    val_loader = torch.utils.data.DataLoader(dataset=val_dataset, batch_size=256, shuffle=False)
+    dataset_builder = DatasetBuilder(root_path=os.path.join(hydra.utils.get_original_cwd(), '../data'), **cfg.dataset)
+    val_dataset = dataset_builder(train=False, normalize=cfg.normalize)
+    val_loader = torch.utils.data.DataLoader(dataset=val_dataset, batch_size=cfg.batch_size, shuffle=False)
 
-    denormalizer = Denormalizer(32, mean, std, to_pixel_space=False)
+    denormalizer = Denormalizer(cfg.dataset.input_size, cfg.dataset.mean, cfg.dataset.std, to_pixel_space=False)
 
     stdacc1_list = list()
     advacc1_list = list()
 
     with tqdm.tqdm(enumerate(val_loader)) as pbar:
         for i, (x, y) in pbar:
-            x, y = x.to('cuda'), y.to('cuda')
+            x, y = x.to(cfg.device), y.to(cfg.device)
 
-            attacker = PgdAttack(32, mean, std, num_iteration, eps, step_size, 'linf', rand_init, scale_each)
-            x_adv = attacker(model, x, target=y, avoid_target=True, scale_eps=scale_eps)
+            attacker = PgdAttack(cfg.dataset.input_size, cfg.dataset.mean, cfg.dataset.std, cfg.attack.num_iteration, cfg.attack.eps, cfg.attack.step_size, cfg.attack.norm, cfg.attack.rand_init, cfg.attack.scale_each)
+            x_adv = attacker(model, x, target=y, avoid_target=True, scale_eps=cfg.attack.scale_eps)
             y_predict_std = model(x)
             y_predict_adv = model(x_adv)
 
@@ -168,9 +173,13 @@ if __name__ == '__main__':
             if i == 0:
 
                 x_for_save = torch.cat([denormalizer(x[0:8, :, :, :]), denormalizer(x_adv[0:8, :, :, :])], dim=2)
-                torchvision.utils.save_image(x_for_save, '../logs/pgd_test.png')
+                torchvision.utils.save_image(x_for_save, os.path.join(hydra.utils.get_original_cwd(), '../logs/pgd_test.png'))
 
     stdacc1 = sum(stdacc1_list) / float(len(stdacc1_list))
     advacc1 = sum(advacc1_list) / float(len(advacc1_list))
 
     print('std: {std}, adv: {adv}'.format(std=stdacc1, adv=advacc1))
+
+
+if __name__ == '__main__':
+    main()
