@@ -131,6 +131,7 @@ class PgdAttack(AttackWrapper):
 def main(cfg: omegaconf.DictConfig) -> None:
     import math
     import tqdm
+    import logging
     import collections
     import torchvision
 
@@ -140,7 +141,10 @@ def main(cfg: omegaconf.DictConfig) -> None:
     from submodules.DatasetBuilder.dataset_builder import DatasetBuilder
     from submodules.ModelBuilder.model_builder import ModelBuilder
 
-    print(cfg.pretty())
+    logger = logging.getLogger(__name__)
+    logger.info(cfg.pretty())
+
+    # print(cfg.pretty())
     cfg.attack.step_size = eval(cfg.attack.step_size)  # eval actual value of step_size
 
     model = ModelBuilder(num_classes=cfg.dataset.num_classes)[cfg.arch]
@@ -179,7 +183,8 @@ def main(cfg: omegaconf.DictConfig) -> None:
     stdacc1 = sum(stdacc1_list) / float(len(stdacc1_list))
     advacc1 = sum(advacc1_list) / float(len(advacc1_list))
 
-    print('std: {std}, adv: {adv}'.format(std=stdacc1, adv=advacc1))
+    # print('std: {std}, adv: {adv}'.format(std=stdacc1, adv=advacc1))
+    logger.info('std: {std}, adv: {adv}'.format(std=stdacc1, adv=advacc1))
 
 
 if __name__ == '__main__':
