@@ -1,0 +1,8 @@
+defaults:
+  - misc
+  - dataset: cifar10
+  - attack: pgd
+
+hydra:
+  run:
+    dir: ../logs/${hydra.job.name}/${now:%Y-%m-%d_%H-%M-%S}
