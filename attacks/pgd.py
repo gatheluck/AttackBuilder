@@ -12,7 +12,7 @@ from attacks.utils import normalized_random_init
 
 
 class PgdAttack(AttackWrapper):
-    SUPPORTED_NORM = 'linf'.split()
+    SUPPORTED_NORM = 'linf l2'.split()
 
     def __init__(self, input_size: int, mean: tuple, std: tuple, num_iteration: int, eps_max: float, step_size: float, norm: str, rand_init: bool, scale_each: bool, criterion=torch.nn.CrossEntropyLoss(), device='cuda'):
         """
@@ -49,7 +49,8 @@ class PgdAttack(AttackWrapper):
         initialize delta. if self.rand_init is True, execute random initialization.
         """
         if self.rand_init:
-            init_delta = normalized_random_init(shape, self.norm)
+            init_delta = normalized_random_init(shape, self.norm, device=self.device)  # initialize delta for linf or l2
+
             init_delta = eps[:, None, None, None] * init_delta  # scale by eps
             init_delta.requires_grad_()
             return init_delta
