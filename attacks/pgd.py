@@ -34,7 +34,7 @@ class PgdAttack(AttackWrapper):
             raise ValueError('not supported norm type')
 
         assert num_iteration >= 0
-        assert eps_max >= 0.0
+        assert eps_max > 0.0
         assert step_size >= 0.0
 
         self.num_iteration = num_iteration
@@ -109,13 +109,13 @@ class PgdAttack(AttackWrapper):
                 pixel_delta.data = torch.clamp(pixel_input.data + pixel_delta.data, 0.0, 255.0) - pixel_input.data
             elif self.norm == 'l2':
                 batch_size = pixel_delta.data.size(0)
-                grad_norm = torch.norm(grad.view(batch_size, -1), p=2.0, dim=1)
+                grad_norm = torch.norm(grad.view(batch_size, -1), p=2.0, dim=1)  # IMPORTANT: if you set eps = 0.0 this leads nan
                 normalized_grad = grad / grad_norm[:, None, None, None]
                 pixel_delta.data = pixel_delta.data + step_size[:, None, None, None] * normalized_grad
                 l2_pixel_delta = torch.norm(pixel_delta.data.view(batch_size, -1), p=2.0, dim=1)
                 # check numerical instabitily
                 proj_scale = torch.min(torch.ones_like(l2_pixel_delta, device=self.device), l2_eps_max / l2_pixel_delta)
-                pixel_delta.data *= proj_scale[:, None, None, None]
+                pixel_delta.data = pixel_delta.data * proj_scale[:, None, None, None]
                 pixel_delta.data = torch.clamp(pixel_input.data + pixel_delta.data, 0.0, 255.0) - pixel_input.data
             else:
                 raise NotImplementedError
@@ -163,8 +163,9 @@ def main(cfg: omegaconf.DictConfig) -> None:
 
             attacker = PgdAttack(cfg.dataset.input_size, cfg.dataset.mean, cfg.dataset.std, cfg.attack.num_iteration, cfg.attack.eps, cfg.attack.step_size, cfg.attack.norm, cfg.attack.rand_init, cfg.attack.scale_each)
             x_adv = attacker(model, x, target=y, avoid_target=True, scale_eps=cfg.attack.scale_eps)
-            y_predict_std = model(x)
-            y_predict_adv = model(x_adv)
+            with torch.autograd.no_grad():
+                y_predict_std = model(x)
+                y_predict_adv = model(x_adv)
 
             stdacc1_list.append(*accuracy(y_predict_std, y))
             advacc1_list.append(*accuracy(y_predict_adv, y))
@@ -173,7 +174,7 @@ def main(cfg: omegaconf.DictConfig) -> None:
             if i == 0:
 
                 x_for_save = torch.cat([denormalizer(x[0:8, :, :, :]), denormalizer(x_adv[0:8, :, :, :])], dim=2)
-                torchvision.utils.save_image(x_for_save, os.path.join(hydra.utils.get_original_cwd(), '../logs/pgd_test.png'))
+                torchvision.utils.save_image(x_for_save, 'pgd_test.png')
 
     stdacc1 = sum(stdacc1_list) / float(len(stdacc1_list))
     advacc1 = sum(advacc1_list) / float(len(advacc1_list))
