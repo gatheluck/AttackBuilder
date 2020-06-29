@@ -12,15 +12,15 @@ def normalized_random_init(shape: torch.Size, norm: str, device='cuda'):
     assert norm in allowed_norms
 
     if norm == 'linf':
-        init = 2.0 * torch.rand(shape, dtype=torch.float32, device=device) - 1.0
+        init = 2.0 * torch.rand(shape, dtype=torch.float32, device=device) - 1.0  # values are in [-1, +1]
     elif norm == 'l2':
-        init = 2.0 * torch.rand(shape, dtype=torch.float32, device=device) - 1.0
+        init = 2.0 * torch.randn(shape, dtype=torch.float32, device=device)  # values in init are sampled form N(0,1)
         init_norm = torch.norm(init.view(init.size(0), -1), p=2.0, dim=1)  # (B)
         normalized_init = init / init_norm[:, None, None, None]
 
         dim = init.size(1) * init.size(2) * init.size(3)
         rand_norm = torch.pow(torch.rand(init.size(0), dtype=torch.float32, device=device), 1.0 / dim)
-        init = normalized_init * rand_norm[:, None, None, None, None]
+        init = normalized_init * rand_norm[:, None, None, None]
     else:
         raise NotImplementedError
 
